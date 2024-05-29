@@ -34,7 +34,7 @@ for initial_condition in np.arange(1, 101):
     input = jnp.array(rng.poisson(4, size=1) + 1e-3)
 
     def two_layer_network_loss(W, x, target_multiple):
-        
+      
       return jnp.mean((W[0] * W[1] * x - target_multiple * x)**2)
 
     grad_network = grad(two_layer_network_loss, argnums=(0))

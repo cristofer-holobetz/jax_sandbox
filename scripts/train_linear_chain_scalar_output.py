@@ -4,8 +4,48 @@ import matplotlib.pyplot as plt
 
 import jax
 import jax.numpy as jnp
+from jax.typing import ArrayLike
 import numpy as np
 import matplotlib.pyplot as plt
+
+
+def collect_hessian(pytree_hessian):
+
+    # base case
+    if isinstance(pytree_hessian, ArrayLike):
+
+        return pytree_hessian
+    
+    # bottom recursive case - concatenate horizontally
+    elif isinstance(pytree_hessian[list(pytree_hessian.keys())[0]], ArrayLike):
+
+        return jnp.concatenate([collect_hessian(pytree_hessian[key]) for key in pytree_hessian.keys()], axis=1)
+
+
+    # intermediate recursive case - concatenate vertically
+    else:
+
+        return jnp.concatenate([collect_hessian(pytree_hessian[key]) for key in pytree_hessian.keys()], axis=0)
+    
+def collect_gradient(pytree_gradient):
+
+    # base case
+    if isinstance(pytree_gradient, ArrayLike):
+
+        return pytree_gradient
+    
+    # intermediate recursive case - concatenate vertically
+    else:
+
+        return jnp.concatenate([collect_hessian(pytree_gradient[key]) for key in pytree_gradient.keys()], axis=0)
+
+def distribute_inverse_hessian(inverse_hessian, treedef):
+    """
+    Take in an inverse hessian in matrix form and a tree structure definition. Unpack
+    the inverse hessian so it's stored with the same structure as the treedef 
+
+    """
+
 
 # loss is mean squared error given predictions and labels
 def loss_l2(y_hat, y, ws=None):
@@ -52,20 +92,27 @@ def create_trainer(ws, lr, loss, jit=True):
 
             # I want the hessian to be a pytree where each leaf is the hessian
             # wrt only the weights in that layer
-            hessian = compute_hessian(ws, x, y)
-            
-            inverse_hessian = jnp.invert(hessian)
+            pytree_hessian = compute_hessian(ws, x, y)
+            hessian = collect_hessian(pytree_hessian)
+            inverse_hessian = jnp.linalg.inv(hessian)
 
-            ws = jax.tree_util.tree_map(nm, ws, grads, inverse_hessian)
+            gradient = collect_gradient(ws)
 
-        return loss, ws
+            ws_treedef = jax.tree_util.tree_structure(ws)
+
+            update_vector = jnp.linalg.matmul(inverse_hessian, gradient)
+            pytree_update_vector = jax.tree_util.tree_unflatten(ws_treedef, update_vector)
+
+            ws1 = jax.tree_util.tree_map(nm, ws, pytree_update_vector)
+
+        return loss, ws1
     
     def training_step(ws, xs, ys, train):
         
         loss, ws = train(ws, xs, ys)
 
         return ws, loss
-    
+
     forward = jax.tree_util.Partial(forward, loss=loss)
     v_and_g = jax.value_and_grad(forward)
     compute_hessian = jax.hessian(forward)
@@ -79,14 +126,14 @@ def create_trainer(ws, lr, loss, jit=True):
 
 root_seed = 1
 np.random.seed(root_seed)
-in_dim = 3
-hidden_dim = 5
-out_dim = 12
+in_dim = 1
+hidden_dim = 1
+out_dim = 1
 items_n = 5
 lr = 0.03
 steps = 700
 inits = 5
-stds = jnp.linspace(0.01, 0.5, 25)
+std = 0.2
 
 #ws = {
 #    "w1": jnp.concatenate([np.random.normal(0., std, (inits, hidden_dim, in_dim)) for std in stds], axis=0),
@@ -94,8 +141,8 @@ stds = jnp.linspace(0.01, 0.5, 25)
 #}
 
 ws = {
-    "w1": jnp.concatenate([np.random.normal(0., std, (inits, hidden_dim, in_dim)) for std in stds], axis=0),
-    "w2": jnp.concatenate([np.random.normal(0., std, (inits, out_dim, hidden_dim)) for std in stds], axis=0)
+    "w1": np.random.uniform(-3, 3, (hidden_dim, in_dim)),
+    "w2": np.random.uniform(-3, 3, (hidden_dim, in_dim))
 }
 
 xs =  np.random.normal(0., 1., (in_dim, items_n))
@@ -103,14 +150,19 @@ ys =  np.random.normal(0., 1., (out_dim, items_n))
 
 losses = []
 weights = []
-ws, trainer = create_trainer(ws, lr, loss_l2)
+ws, trainer = create_trainer(ws, lr, loss_l2, jit=False)
 for step in range(steps):
     
     i =  np.random.randint(items_n)
     ws, loss = trainer(ws, xs[:, [i]], ys[:, [i]])
     losses.append(loss)
-    weights.append(ws)
+
+weights.append(ws)
 
 # Loss for 700 Training steps for 5 initialisations across 25 initial stds
 print(np.asarray(losses).shape)
 print()
+
+fig, ax = plt.subplots()
+
+ax.scatter()
