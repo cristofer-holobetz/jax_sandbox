@@ -16,8 +16,8 @@ hidden_dim = 1
 out_dim = 1
 items_n = 5
 lr = 0.03
-steps = 1000
-inits = 1000
+steps = 100
+inits = 50
 
 ws_init = {
     "w1": np.random.uniform(-4, 4, (inits, hidden_dim, in_dim)),
@@ -87,7 +87,7 @@ def loss_l2(y_hat, y, ws=None):
 # This function creates a trainer given a particular set of weights,
 # a specific loss function and a learning rate
 # The trainer 
-def create_trainer(ws, lr, loss, jit=True):
+def create_trainer(ws, lr, loss, jit=True, optimizer_type='nm'):
     
     def forward(ws, x, y, loss):
         
@@ -161,7 +161,8 @@ def create_trainer(ws, lr, loss, jit=True):
             #loss_tree = jax.tree_util.tree_unflatten(ws_treedef, [loss] * num_layers)
 
             ws = jax.tree_util.tree_map(nm, ws, pytree_update_vector)
-            ws = unflatten_ws_leaves(ws, ((hidden_dim, in_dim), (out_dim, hidden_dim)))
+            
+        ws = unflatten_ws_leaves(ws, ((hidden_dim, in_dim), (out_dim, hidden_dim)))
 
         return loss, ws
     
@@ -175,7 +176,7 @@ def create_trainer(ws, lr, loss, jit=True):
     v_and_g = jax.value_and_grad(forward)
     compute_hessian = jax.hessian(forward, argnums=0)
     
-    train = jax.tree_util.Partial(train, v_and_g=v_and_g, compute_hessian=compute_hessian, optimizer_type='nm')
+    train = jax.tree_util.Partial(train, v_and_g=v_and_g, compute_hessian=compute_hessian, optimizer_type=optimizer_type)
     training_step = jax.tree_util.Partial(training_step, train=train)
 
     ws_map = {k: 0 for k in ws.keys()}
@@ -200,13 +201,13 @@ ws = {
     "w2": jnp.concatenate([np.random.normal(0., std, (inits, out_dim, hidden_dim)) for std in stds], axis=0)
 }
 """
-xs = np.random.poisson(lam=1, size=(in_dim, items_n)) + 10
+xs = np.random.poisson(lam=1, size=(in_dim, items_n)) + 1e-3
 ys = TARGET_MULTIPLE * xs
 #ys =  np.random.normal(0., 1., (out_dim, items_n))
 
 losses = []
 weights = []
-ws, trainer = create_trainer(ws_init, lr, loss_l2, jit=True)
+ws, trainer = create_trainer(ws_init, lr, loss_l2, jit=True, optimizer_type='nm')
 for step in range(steps):
     
     i =  np.random.randint(items_n)
@@ -223,11 +224,42 @@ init_w2 = ws_init['w2'].squeeze()
 final_w1 = ws['w1'].squeeze()
 final_w2 = ws['w2'].squeeze()
 
+# Plot the init - final weight pairs
+for init_i in np.arange(inits):
+
+    ax.plot([init_w1[init_i], final_w1[init_i]], [init_w2[init_i], final_w2[init_i]], color='tab:purple', zorder=-1)
+
 # Plot the initial weights
-ax.scatter(init_w1, init_w2, label='initializations', color='tab:blue')
+ax.scatter(init_w1, init_w2, color='tab:blue', label='initial weights')
 
 # Plot the final weights
-ax.scatter(final_w1, final_w2, label='final weights', color='tab:orange')
+ax.scatter(final_w1, final_w2, color='tab:purple', label='final weights from NM', alpha=0.5)
+
+
+losses = []
+weights = []
+ws, trainer = create_trainer(ws_init, lr, loss_l2, jit=True, optimizer_type='sgd')
+for step in range(steps):
+    
+    i =  np.random.randint(items_n)
+    ws, loss = trainer(ws, xs[:, [i]], ys[:, [i]])
+    losses.append(loss)
+
+    weights.append(ws)
+
+init_w1 = ws_init['w1'].squeeze()
+init_w2 = ws_init['w2'].squeeze()
+
+final_w1 = ws['w1'].squeeze()
+final_w2 = ws['w2'].squeeze()
+
+# Plot the init - final weight pairs
+for init_i in np.arange(inits):
+
+    ax.plot([init_w1[init_i], final_w1[init_i]], [init_w2[init_i], final_w2[init_i]], color='tab:orange', zorder=-1)
+
+# Plot the final weights
+ax.scatter(final_w1, final_w2, color='tab:orange', label='final weights from SGD', alpha=0.5)
 
 target_curve_x_left = np.linspace(-4, 0, 500)[:-1]
 target_curve_x_right = np.linspace(0, 4, 500)[1:]
@@ -241,10 +273,11 @@ ax.plot(target_curve_x_right, target_curve_y_right, color='tab:green')
 ax.set_xlim(-4, 4)
 ax.set_ylim(-4, 4)
 
-# Plot the init - final weight pairs
-for init_i in np.arange(inits):
+ax.set_title('Weight evolution under Newton\'s Method vs Gradient Descent')
 
-    ax.plot([init_w1[init_i], final_w1[init_i]], [init_w2[init_i], final_w2[init_i]], color='tab:purple')
+ax.set_xlabel('w1')
+ax.set_ylabel('w2')
 
+ax.legend()
 plt.show()
 print()
